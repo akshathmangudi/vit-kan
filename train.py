@@ -17,11 +17,17 @@ def main(train_loader, test_loader, args):
     # Check available GPUs
     if torch.cuda.is_available():
         num_gpus = torch.cuda.device_count()
-        logging.info(f"Found {num_gpus} GPU(s)")
+        gpu_info = f"Found {num_gpus} GPU(s)"
+        print(gpu_info)
+        logging.info(gpu_info)
         for i in range(num_gpus):
-            logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+            gpu_name = f"GPU {i}: {torch.cuda.get_device_name(i)}"
+            print(gpu_name)
+            logging.info(gpu_name)
     else:
-        logging.info("No GPUs available, using CPU")
+        no_gpu_msg = "No GPUs available, using CPU"
+        print(no_gpu_msg)
+        logging.info(no_gpu_msg)
 
     # Create model
     model = VisionTransformer(
@@ -36,11 +42,15 @@ def main(train_loader, test_loader, args):
 
     # Use DataParallel if multiple GPUs are available
     if torch.cuda.device_count() > 1:
-        logging.info(f"Using DataParallel with {torch.cuda.device_count()} GPUs")
+        dp_msg = f"Using DataParallel with {torch.cuda.device_count()} GPUs"
+        print(dp_msg)
+        logging.info(dp_msg)
         model = torch.nn.DataParallel(model)
         # Adjust batch size for multiple GPUs
         effective_batch_size = args.batch_size * torch.cuda.device_count()
-        logging.info(f"Effective batch size: {effective_batch_size}")
+        batch_msg = f"Effective batch size: {effective_batch_size}"
+        print(batch_msg)
+        logging.info(batch_msg)
     
     model = model.to(device)
 
@@ -53,8 +63,13 @@ def main(train_loader, test_loader, args):
         total_params = sum(p.numel() for p in model.parameters())
         trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     
-    logging.info(f"Total parameters: {total_params:,}")
-    logging.info(f"Trainable parameters: {trainable_params:,}")
+    params_msg = f"Total parameters: {total_params:,}"
+    print(params_msg)
+    logging.info(params_msg)
+    
+    trainable_msg = f"Trainable parameters: {trainable_params:,}"
+    print(trainable_msg)
+    logging.info(trainable_msg)
 
     criterion = torch.nn.CrossEntropyLoss(label_smoothing=args.label_smoothing)
     
@@ -152,13 +167,34 @@ def main(train_loader, test_loader, args):
 
         accuracy, balanced_accuracy, f1, roc_auc = calculate_metrics(y_true_train, y_pred_train, y_pred_proba_train)
 
-        logging.info(f"Epoch {epoch + 1}/{args.epochs}")
-        logging.info(f"  Train Loss: {train_loss:.4f}")
-        logging.info(f"  Train Accuracy: {accuracy:.4f}")
-        logging.info(f"  Train Balanced Accuracy: {balanced_accuracy:.4f}")
-        logging.info(f"  Train F1 Score: {f1:.4f}")
-        logging.info(f"  Train ROC AUC: {roc_auc:.4f}")
-        logging.info(f"  Learning Rate: {scheduler.get_last_lr()[0]:.6f}")
+        # Print and log training results
+        train_results = f"Epoch {epoch + 1}/{args.epochs}"
+        print(train_results)
+        logging.info(train_results)
+        
+        train_loss_str = f"  Train Loss: {train_loss:.4f}"
+        print(train_loss_str)
+        logging.info(train_loss_str)
+        
+        train_acc_str = f"  Train Accuracy: {accuracy:.4f}"
+        print(train_acc_str)
+        logging.info(train_acc_str)
+        
+        train_bal_acc_str = f"  Train Balanced Accuracy: {balanced_accuracy:.4f}"
+        print(train_bal_acc_str)
+        logging.info(train_bal_acc_str)
+        
+        train_f1_str = f"  Train F1 Score: {f1:.4f}"
+        print(train_f1_str)
+        logging.info(train_f1_str)
+        
+        train_roc_str = f"  Train ROC AUC: {roc_auc:.4f}"
+        print(train_roc_str)
+        logging.info(train_roc_str)
+        
+        lr_str = f"  Learning Rate: {scheduler.get_last_lr()[0]:.6f}"
+        print(lr_str)
+        logging.info(lr_str)
 
         # Validation/Testing every few epochs or at the end
         if (epoch + 1) % args.eval_freq == 0 or epoch == args.epochs - 1:
@@ -187,12 +223,30 @@ def main(train_loader, test_loader, args):
 
                 accuracy, balanced_accuracy, f1, roc_auc = calculate_metrics(y_true_test, y_pred_test, y_pred_proba_test)
 
-                logging.info("Test Results:")
-                logging.info(f"  Test Loss: {test_loss:.4f}")
-                logging.info(f"  Test Accuracy: {accuracy:.4f}")
-                logging.info(f"  Test Balanced Accuracy: {balanced_accuracy:.4f}")
-                logging.info(f"  Test F1 Score: {f1:.4f}")
-                logging.info(f"  Test ROC AUC: {roc_auc:.4f}")
+                # Print and log test results
+                test_header = "Test Results:"
+                print(test_header)
+                logging.info(test_header)
+                
+                test_loss_str = f"  Test Loss: {test_loss:.4f}"
+                print(test_loss_str)
+                logging.info(test_loss_str)
+                
+                test_acc_str = f"  Test Accuracy: {accuracy:.4f}"
+                print(test_acc_str)
+                logging.info(test_acc_str)
+                
+                test_bal_acc_str = f"  Test Balanced Accuracy: {balanced_accuracy:.4f}"
+                print(test_bal_acc_str)
+                logging.info(test_bal_acc_str)
+                
+                test_f1_str = f"  Test F1 Score: {f1:.4f}"
+                print(test_f1_str)
+                logging.info(test_f1_str)
+                
+                test_roc_str = f"  Test ROC AUC: {roc_auc:.4f}"
+                print(test_roc_str)
+                logging.info(test_roc_str)
 
                 # Save best model
                 if accuracy > best_test_acc:
@@ -207,7 +261,9 @@ def main(train_loader, test_loader, args):
                             'test_accuracy': accuracy,
                             'args': args
                         }, os.path.join(args.log_dir, 'best_model.pth'))
-                        logging.info(f"New best model saved with accuracy: {accuracy:.4f}")
+                        best_model_str = f"New best model saved with accuracy: {accuracy:.4f}"
+                        print(best_model_str)
+                        logging.info(best_model_str)
 
                 save_metrics(metrics_log_filename, epoch + 1, "Test", test_loss, accuracy, balanced_accuracy, f1, roc_auc, flag=1)
 
@@ -215,7 +271,9 @@ def main(train_loader, test_loader, args):
         if epoch == args.epochs - 1:
             save_metrics(metrics_log_filename, epoch + 1, "Train", train_loss, accuracy, balanced_accuracy, f1, roc_auc, flag=0)
 
-    logging.info(f"Training completed. Best test accuracy: {best_test_acc:.4f}")
+    final_results = f"Training completed. Best test accuracy: {best_test_acc:.4f}"
+    print(final_results)
+    logging.info(final_results)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Benchmark Vision Transformer on CIFAR-100')
