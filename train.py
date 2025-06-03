@@ -13,23 +13,46 @@ from utils import calculate_metrics, save_metrics, setup_logging
 
 def main(train_loader, test_loader, args):
     device = torch.device(args.device)
-    logging.info(f"Using device: {device} " +
-                 (f"({torch.cuda.get_device_name(device)})" if torch.cuda.is_available() else ""))
+    
+    # Check available GPUs
+    if torch.cuda.is_available():
+        num_gpus = torch.cuda.device_count()
+        logging.info(f"Found {num_gpus} GPU(s)")
+        for i in range(num_gpus):
+            logging.info(f"GPU {i}: {torch.cuda.get_device_name(i)}")
+    else:
+        logging.info("No GPUs available, using CPU")
 
-    # Updated model configuration for better CIFAR-100 performance
+    # Create model
     model = VisionTransformer(
         (3, 32, 32), 
-        n_patches=args.n_patches,  # Now configurable
+        n_patches=args.n_patches,
         n_blocks=args.n_blocks, 
         d_hidden=args.d_hidden, 
         n_heads=args.n_heads, 
         out_d=100,
         type=args.model_type
-    ).to(device)
+    )
+
+    # Use DataParallel if multiple GPUs are available
+    if torch.cuda.device_count() > 1:
+        logging.info(f"Using DataParallel with {torch.cuda.device_count()} GPUs")
+        model = torch.nn.DataParallel(model)
+        # Adjust batch size for multiple GPUs
+        effective_batch_size = args.batch_size * torch.cuda.device_count()
+        logging.info(f"Effective batch size: {effective_batch_size}")
+    
+    model = model.to(device)
 
     # Log model parameters
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    if hasattr(model, 'module'):
+        # DataParallel wraps the model, so access the underlying module
+        total_params = sum(p.numel() for p in model.module.parameters())
+        trainable_params = sum(p.numel() for p in model.module.parameters() if p.requires_grad)
+    else:
+        total_params = sum(p.numel() for p in model.parameters())
+        trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
     logging.info(f"Total parameters: {total_params:,}")
     logging.info(f"Trainable parameters: {trainable_params:,}")
 
@@ -67,6 +90,10 @@ def main(train_loader, test_loader, args):
     )
 
     metrics_log_filename = setup_logging(args.log_dir)
+    
+    # Initialize AMP scaler if using mixed precision
+    if args.use_amp:
+        scaler = torch.cuda.amp.GradScaler()
     
     best_test_acc = 0.0
     step = 0
@@ -156,7 +183,7 @@ def main(train_loader, test_loader, args):
 
                     y_true_test.extend(y.cpu().numpy())
                     y_pred_test.extend(torch.argmax(y_hat, dim=1).cpu().numpy())
-                    y_pred_test.extend(torch.nn.functional.softmax(y_hat, dim=1).cpu().numpy())
+                    y_pred_proba_test.extend(torch.nn.functional.softmax(y_hat, dim=1).cpu().numpy())
 
                 accuracy, balanced_accuracy, f1, roc_auc = calculate_metrics(y_true_test, y_pred_test, y_pred_proba_test)
 
@@ -171,9 +198,11 @@ def main(train_loader, test_loader, args):
                 if accuracy > best_test_acc:
                     best_test_acc = accuracy
                     if args.save_model:
+                        # Handle DataParallel when saving
+                        model_to_save = model.module if hasattr(model, 'module') else model
                         torch.save({
                             'epoch': epoch + 1,
-                            'model_state_dict': model.state_dict(),
+                            'model_state_dict': model_to_save.state_dict(),
                             'optimizer_state_dict': optimizer.state_dict(),
                             'test_accuracy': accuracy,
                             'args': args
@@ -191,13 +220,13 @@ def main(train_loader, test_loader, args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Benchmark Vision Transformer on CIFAR-100')
     parser.add_argument('--epochs', type=int, default=20, help='number of epochs to train')
-    parser.add_argument('--batch-size', type=int, default=128, help='batch size for training')
-    parser.add_argument('--learning-rate', type=float, default=0.0003, help='learning rate for optimizer (reduced default)')
+    parser.add_argument('--batch-size', type=int, default=128, help='batch size per GPU')
+    parser.add_argument('--learning-rate', type=float, default=0.0003, help='learning rate for optimizer')
     parser.add_argument('--weight-decay', type=float, default=0.05, help='weight decay for optimizer')
-    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='device to use for training (cuda/cpu)')
+    parser.add_argument('--device', type=str, default='cuda' if torch.cuda.is_available() else 'cpu', help='device to use for training')
     parser.add_argument('--model-type', type=str, default='vanilla', help='variant to run')
     parser.add_argument('--n-blocks', type=int, default=8, help='number of transformer blocks')
-    parser.add_argument('--d-hidden', type=int, default=384, help='hidden dimension of transformer block (reduced default)')
+    parser.add_argument('--d-hidden', type=int, default=384, help='hidden dimension of transformer block')
     parser.add_argument('--n-heads', type=int, default=6, help='number of attention heads')
     parser.add_argument('--n-patches', type=int, default=8, help='number of patches (8x8 = 64 patches for 32x32 images)')
     parser.add_argument('--log-dir', type=str, default='logs', help='directory to store logs')
@@ -208,10 +237,6 @@ if __name__ == "__main__":
     parser.add_argument('--eval-freq', type=int, default=5, help='evaluation frequency (epochs)')
     parser.add_argument('--save-model', action='store_true', help='save best model')
     args = parser.parse_args()
-
-    # Initialize AMP scaler if using mixed precision
-    if args.use_amp:
-        scaler = torch.cuda.amp.GradScaler()
 
     # Improved CIFAR-100 Transformations
     cifar_train_transforms = transforms.Compose([
@@ -233,8 +258,9 @@ if __name__ == "__main__":
     train_dataset = CIFAR100(root='./cifar100', train=True, download=True, transform=cifar_train_transforms)
     test_dataset = CIFAR100(root='./cifar100', train=False, download=True, transform=cifar_test_transforms)
 
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=8, pin_memory=True, drop_last=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=8, pin_memory=True)
+    # For DataParallel, keep num_workers reasonable
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, pin_memory=True, drop_last=True)
+    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
     # Create log directory
     os.makedirs(args.log_dir, exist_ok=True)
